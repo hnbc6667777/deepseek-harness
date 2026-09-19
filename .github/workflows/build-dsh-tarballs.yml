@@ -1,0 +1,126 @@
+name: Build dsh tarballs
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag, e.g. dsh-v0.1.6-alpha.2. Leave empty to auto-generate.'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+env:
+  PRIMARY_NODE_VERSION: '24'
+  DSH_TELEMETRY_DISABLED: '1'
+
+jobs:
+  pack:
+    name: Build and pack npm tarballs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+          dest: ${{ runner.temp }}/setup-pnpm
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.PRIMARY_NODE_VERSION }}
+
+      - name: Configure pnpm store path
+        id: pnpm-store
+        run: |
+          store_root="$HOME/.local/share/pnpm/store"
+          echo "PNPM_CONFIG_STORE_DIR=$store_root" >> "$GITHUB_ENV"
+          store_path=$(PNPM_CONFIG_STORE_DIR="$store_root" pnpm store path --silent)
+          echo "path=$store_path" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ runner.os }}-node-${{ env.PRIMARY_NODE_VERSION }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-node-${{ env.PRIMARY_NODE_VERSION }}-pnpm-
+
+      - name: Install (immutable)
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify release version
+        env:
+          RELEASE_PUBLISH: 'true'
+        run: pnpm run release:verify --family dsh
+
+      - name: Build
+        run: pnpm run build:official
+
+      - name: Pack release tarballs
+        run: pnpm run release:pack --family dsh --out dist/npm
+
+      - name: Pack the vendored framework for verification
+        run: pnpm run release:pack --family vendor --out dist/npm-vendor
+
+      - name: Pack the Landlock entry for verification
+        run: |
+          pnpm --dir native/system run build:ts
+          pnpm --dir native/system/packages/entry pack --pack-destination "$PWD/dist/npm-landlock"
+
+      - name: Verify packed install
+        run: pnpm run release:verify-packed-install --family dsh --from dist/npm --from dist/npm-vendor --from dist/npm-landlock
+
+      - name: List packed tarballs
+        run: |
+          echo "=== dist/npm ==="
+          ls -la dist/npm | head -60
+          echo "=== count ==="
+          ls dist/npm | wc -l
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsh-npm-tarballs
+          path: dist/npm/*
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish GitHub Release
+    needs: pack
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dsh-npm-tarballs
+          path: tarballs
+
+      - name: Bundle into one zip
+        run: |
+          cd tarballs
+          zip -r ../dsh-npm-tarballs.zip .
+          cd ..
+          ls -lh dsh-npm-tarballs.zip
+
+      - name: Resolve tag name
+        id: tag
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            echo "value=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=dsh-build-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.value }}
+          name: ${{ steps.tag.outputs.value }}
+          files: dsh-npm-tarballs.zip
+          generate_release_notes: true
+          draft: false
