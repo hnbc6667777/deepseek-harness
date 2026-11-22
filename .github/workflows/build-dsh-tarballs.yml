@@ -22,17 +22,16 @@ jobs:
     timeout-minutes: 90
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - uses: pnpm/action-setup@v4
         with:
-          version: 11.7.0
+          package_json_file: package.json
           dest: ${{ runner.temp }}/setup-pnpm
-
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ env.PRIMARY_NODE_VERSION }}
 
