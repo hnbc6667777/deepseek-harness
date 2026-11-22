@@ -67,7 +67,10 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: dsh-npm-tarballs
-          path: dist/npm/*
+         path: |
+            dist/npm/*
+            dist/npm-vendor/*
+            dist/npm-landlock/*
           if-no-files-found: error
           retention-days: 7
 
